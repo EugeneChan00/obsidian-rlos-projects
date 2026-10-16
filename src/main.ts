@@ -6,12 +6,12 @@ import {
   KIND_FOLDERS,
   locate,
   parseRevFolder,
-  PRODUCT_TYPE,
   PROJECTS_ROOT,
   projectNotePath,
   revNotePath,
   RFQ,
   sanitizeName,
+  templateVars,
   today,
   type KindFolder,
   type ProjectLocation,
@@ -105,7 +105,8 @@ export default class RlosProjectsPlugin extends Plugin {
 
   private async syncCanvas(loc: ProjectLocation): Promise<void> {
     const root = this.app.vault.getAbstractFileByPath(loc.root);
-    if (!(root instanceof TFolder)) return;
+    // Only folders already in the spec layout (with a PROJECT note) get a canvas.
+    if (!(root instanceof TFolder) || !this.app.vault.getAbstractFileByPath(projectNotePath(loc.root, loc.folder))) return;
     const collapseRevs = new Set<number>();
     for (const c of root.children) {
       const rev = parseRevFolder(c.name);
@@ -156,12 +157,7 @@ export default class RlosProjectsPlugin extends Plugin {
       return;
     }
     await this.app.vault.createFolder(`${root}/${RFQ}`);
-    const note = await renderTemplate(this.app, "project", projectNotePath(root, folder), {
-      folder,
-      opp: opp.replace(/\D/g, ""),
-      name: sanitizeName(name),
-      product_type: PRODUCT_TYPE[kind],
-    });
+    const note = await renderTemplate(this.app, "project", projectNotePath(root, folder), templateVars(kind, folder, opp.replace(/\D/g, "")));
     await this.newRevision(note.path);
     await this.app.workspace.getLeaf(true).openFile(note);
   }

@@ -58,12 +58,12 @@ export const canvasPath = (root: string, folder: string) => `${root}/${canvasNam
 
 export const wikilink = (basename: string) => `[[${basename}]]`;
 
-/** Basename of a `[[target|alias]]` link value, or null. */
-export function linkTarget(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const m = /^\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]$/.exec(value.trim());
-  return m ? m[1]!.split("/").pop()!.replace(/\.md$/, "") : null;
-}
+/** Note templates (frontmatter placeholders render as YAML scalars). */
+export const TEMPLATES = {
+  project: "policy/templates/project.md",
+  revision: "policy/templates/revision.md",
+  po: "policy/templates/po.md",
+} as const;
 
 const ILLEGAL = /[\\/:*?"<>|#^[\]]/g;
 export function sanitizeName(name: string): string {
@@ -74,4 +74,17 @@ export function sanitizeName(name: string): string {
 export function today(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Placeholder values shared by the project / revision / PO templates of one project folder. */
+export function templateVars(kind: KindFolder, folder: string, opp: string): Record<string, string> {
+  return {
+    folder,
+    opp,
+    name: folder.replace(/^\S+\s*/, ""),
+    product_type: PRODUCT_TYPE[kind],
+    project: projectNoteName(folder),
+    project_link: wikilink(projectNoteName(folder)),
+    canvas_link: wikilink(canvasName(folder)),
+  };
 }

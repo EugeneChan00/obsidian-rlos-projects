@@ -4,7 +4,6 @@ import {
   canvasName,
   KIND_FOLDERS,
   PO,
-  poNoteName,
   poNotePath,
   PRODUCT_TYPE,
   projectNoteName,
@@ -15,6 +14,7 @@ import {
   revNotePath,
   RFQ,
   sanitizeName,
+  templateVars,
   wikilink,
   type KindFolder,
 } from "./model";
@@ -316,9 +316,7 @@ async function applyProject(app: App, p: ProjectPlan): Promise<void> {
     const f = app.vault.getAbstractFileByPath(at(p.projectNote));
     if (f instanceof TFile) await moveTo(app, f, projectPath);
   } else {
-    await renderTemplate(app, "project", projectPath, {
-      folder: p.folder, opp: p.opp, name: p.folder.replace(/^\S+\s*/, ""), product_type: PRODUCT_TYPE[p.kind],
-    });
+    await renderTemplate(app, "project", projectPath, templateVars(p.kind, p.folder, p.opp));
   }
 
   // PO folders → PO/.
@@ -335,7 +333,7 @@ async function applyProject(app: App, p: ProjectPlan): Promise<void> {
     }
     const target = await ensureFolder(app, `${p.newRoot}/${PO}`);
     for (const c of [...f.children]) await moveTo(app, c, freePath(app, target.path, c.name));
-    if (f.children.length === 0) await app.vault.delete(f);
+    if (f.children.length === 0) await app.vault.delete(f, true);
   }
 
   // Root files → RFQ/.
@@ -353,10 +351,7 @@ async function applyProject(app: App, p: ProjectPlan): Promise<void> {
     const path = revNotePath(p.newRoot, p.folder, r.n);
     let note = app.vault.getAbstractFileByPath(path);
     if (!(note instanceof TFile)) {
-      note = await renderTemplate(app, "revision", path, {
-        folder: p.folder, opp: p.opp, product_type: PRODUCT_TYPE[p.kind], rev: String(r.n),
-        project: projectNoteName(p.folder), po: poNoteName(p.folder),
-      });
+      note = await renderTemplate(app, "revision", path, { ...templateVars(p.kind, p.folder, p.opp), rev: r.n });
     }
     await app.fileManager.processFrontMatter(note as TFile, (f: Fm) => {
       if (Number(f.order_value) > 0 && !(Number(f.sell_price) > 0)) f.sell_price = f.order_value;
@@ -401,9 +396,7 @@ async function applyProject(app: App, p: ProjectPlan): Promise<void> {
     let po = app.vault.getAbstractFileByPath(path);
     if (!(po instanceof TFile)) {
       await ensureFolder(app, `${p.newRoot}/${PO}`);
-      po = await renderTemplate(app, "po", path, {
-        folder: p.folder, opp: p.opp, product_type: PRODUCT_TYPE[p.kind], project: projectNoteName(p.folder),
-      });
+      po = await renderTemplate(app, "po", path, templateVars(p.kind, p.folder, p.opp));
     }
     await app.fileManager.processFrontMatter(po as TFile, (f: Fm) => {
       Object.assign(f, poFields);
