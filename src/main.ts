@@ -24,7 +24,7 @@ interface RlosSettings {
 }
 
 const DEFAULT_SETTINGS: RlosSettings = {
-  canvas: { foldSubfolders: true, foldSuperseded: true },
+  canvas: { foldSubfolders: true, foldSuperseded: true, cardWidth: 600, cardHeight: 800, columns: 3 },
 };
 
 function automationApi(app: App): AutomationApi | null {
@@ -51,8 +51,14 @@ export default class RlosProjectsPlugin extends Plugin {
     const savedCanvas: unknown = saved && typeof saved === "object" && "canvas" in saved ? saved.canvas : null;
     if (savedCanvas && typeof savedCanvas === "object") {
       const c = this.settings.canvas;
-      if ("foldSubfolders" in savedCanvas && typeof savedCanvas.foldSubfolders === "boolean") c.foldSubfolders = savedCanvas.foldSubfolders;
-      if ("foldSuperseded" in savedCanvas && typeof savedCanvas.foldSuperseded === "boolean") c.foldSuperseded = savedCanvas.foldSuperseded;
+      for (const key of ["foldSubfolders", "foldSuperseded"] as const) {
+        const v: unknown = Reflect.get(savedCanvas, key);
+        if (typeof v === "boolean") c[key] = v;
+      }
+      for (const key of ["cardWidth", "cardHeight", "columns"] as const) {
+        const v: unknown = Reflect.get(savedCanvas, key);
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) c[key] = v;
+      }
     }
     this.addSettingTab(new RlosSettingTab(this.app, this));
 
@@ -261,7 +267,7 @@ class RlosSettingTab extends PluginSettingTab {
       text: "RFQ, PO and current Rev-N groups stay open. These switches decide which groups the canvas folds on its own. A group you fold or unfold by hand keeps your choice.",
       cls: "setting-item-description",
     });
-    const toggle = (name: string, desc: string, key: keyof CanvasOptions) =>
+    const toggle = (name: string, desc: string, key: "foldSubfolders" | "foldSuperseded") =>
       new Setting(containerEl)
         .setName(name)
         .setDesc(desc)
@@ -275,10 +281,37 @@ class RlosSettingTab extends PluginSettingTab {
         );
     toggle("Fold subfolder groups", "Groups for subfolders inside RFQ, Rev-N and PO start folded. Off: unfold the ones the canvas folded.", "foldSubfolders");
     toggle("Fold superseded revisions", "A Rev-N group folds once its rev is superseded. Off: unfold the ones the canvas folded.", "foldSuperseded");
+
+    const slider = (name: string, desc: string, key: "cardWidth" | "cardHeight" | "columns", min: number, max: number, step: number) =>
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addSlider((s) =>
+          s
+            .setLimits(min, max, step)
+            .setValue(this.plugin.settings.canvas[key])
+            .setDynamicTooltip()
+            .onChange(async (value) => {
+              this.plugin.settings.canvas[key] = value;
+              await this.plugin.saveSettings();
+            }),
+        );
+    slider("Card width", "Width of each note / attachment card. Bigger cards show more at a lower zoom.", "cardWidth", 200, 1600, 20);
+    slider("Card height", "Height of each note / attachment card.", "cardHeight", 200, 2000, 20);
+    slider("Cards per row", "Columns in RFQ / Rev-N / PO groups; nested groups fit as many as their width allows.", "columns", 1, 8, 1);
     new Setting(containerEl)
-      .setName("Apply to all project canvases")
-      .setDesc("Re-sync every project canvas with the current settings.")
-      .addButton((b) => b.setButtonText("Apply now").onClick(() => void this.plugin.syncAllCanvases(false)));
+      .setName("Apply card layout")
+      .setDesc("Re-lay out every project canvas with the current card size. Cards you moved by hand go back to the grid and folding is reset to the switches above; nodes you added yourself stay.")
+      .addButton((b) =>
+        b
+          .setButtonText("Rebuild all canvases")
+          .setWarning()
+          .onClick(() => void this.plugin.syncAllCanvases(true)),
+      );
+    new Setting(containerEl)
+      .setName("Sync all project canvases")
+      .setDesc("Add or remove cards to match the folders, without moving existing ones.")
+      .addButton((b) => b.setButtonText("Sync now").onClick(() => void this.plugin.syncAllCanvases(false)));
   }
 }
 

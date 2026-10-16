@@ -37,6 +37,11 @@ export interface CanvasOptions {
   foldSubfolders: boolean;
   /** Fold a Rev-N group once its rev is superseded. */
   foldSuperseded: boolean;
+  /** Card size of each note/attachment on the canvas (canvas units). */
+  cardWidth: number;
+  cardHeight: number;
+  /** Cards per row in a top-level group (nested groups fit fewer). */
+  columns: number;
 }
 
 /** RLOS schema (policy/PROJECTS.md) expressed as rules on the schema-agnostic automation API. */
@@ -109,7 +114,11 @@ export class RlosAdapter {
       ...(sub.includes(RFQ) ? ([["anchor", RFQ]] as [string, string][]) : []),
       ...chain.slice(1).map((to, i): [string, string] => [chain[i]!, to]),
     ];
-    await this.api.canvas.sync({ canvasPath: canvasPath(loc.root, loc.folder), idPrefix: ID_PREFIX, anchor, groups, edges }, opts);
+    const { cardWidth, cardHeight, columns } = this.canvasOptions();
+    await this.api.canvas.sync(
+      { canvasPath: canvasPath(loc.root, loc.folder), idPrefix: ID_PREFIX, anchor, groups, edges, layout: { cardWidth, cardHeight, columns } },
+      opts,
+    );
   }
 
   /**
