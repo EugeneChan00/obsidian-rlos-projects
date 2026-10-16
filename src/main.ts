@@ -76,7 +76,18 @@ export default class RlosProjectsPlugin extends Plugin {
         return true;
       },
     });
-    this.addCommand({ id: "sync-all-canvases", name: "Sync all project canvases", callback: () => void this.syncAllCanvases() });
+    this.addCommand({
+      id: "rebuild-canvas",
+      name: "Rebuild canvas layout for current project",
+      checkCallback: (checking) => {
+        const loc = locate(this.app.workspace.getActiveFile()?.path ?? "");
+        if (!loc || !this.adapter) return false;
+        if (!checking) void this.adapter.syncCanvas(loc, { rebuild: true }).then(() => new Notice(`Canvas rebuilt: ${loc.folder}`));
+        return true;
+      },
+    });
+    this.addCommand({ id: "sync-all-canvases", name: "Sync all project canvases", callback: () => void this.syncAllCanvases(false) });
+    this.addCommand({ id: "rebuild-all-canvases", name: "Rebuild all project canvas layouts", callback: () => void this.syncAllCanvases(true) });
     this.addCommand({ id: "sync-all-spaces", name: "Sync window spaces for all projects", callback: () => void this.syncAllSpaces() });
     this.addCommand({ id: "check", name: "Check project frontmatter", callback: () => void this.check() });
     this.addCommand({ id: "sync-selectors", name: "Sync Custom Selectors options from schema", callback: () => void this.syncSelectors() });
@@ -103,10 +114,10 @@ export default class RlosProjectsPlugin extends Plugin {
     return out;
   }
 
-  private async syncAllCanvases(): Promise<void> {
+  private async syncAllCanvases(rebuild: boolean): Promise<void> {
     const locs = this.projectLocations();
-    for (const loc of locs) await this.adapter!.syncCanvas(loc);
-    new Notice(`Synced ${locs.length} canvases`);
+    for (const loc of locs) await this.adapter!.syncCanvas(loc, { rebuild });
+    new Notice(`${rebuild ? "Rebuilt" : "Synced"} ${locs.length} canvases`);
   }
 
   private async syncAllSpaces(): Promise<void> {

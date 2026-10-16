@@ -1,4 +1,4 @@
-import type { AutomationApi, Frontmatter } from "../../vault-automation/src/api";
+import type { AutomationApi, CanvasGroupSpec, Frontmatter } from "../../vault-automation/src/api";
 import {
   canvasPath,
   locate,
@@ -79,27 +79,26 @@ export class RlosAdapter {
     return revNotePath(loc.root, loc.folder, next);
   }
 
-  async syncCanvas(loc: ProjectLocation): Promise<void> {
+  /** Canvas = PROJECT note + one group per RFQ / Rev-N / PO folder, with a nested group per subfolder. */
+  async syncCanvas(loc: ProjectLocation, opts?: { rebuild?: boolean }): Promise<void> {
     const anchor = projectNotePath(loc.root, loc.folder);
     if (!this.api.notes.file(anchor)) return; // only folders already in the spec layout
     const sub = this.api.notes.subfolders(loc.root);
     const revs = sub.map(parseRevFolder).filter((n): n is number => n !== null).sort((a, b) => a - b);
-    const groups = [
-      ...(sub.includes(RFQ) ? [{ key: RFQ, label: RFQ, files: this.paths(`${loc.root}/${RFQ}`) }] : []),
+    const groups: CanvasGroupSpec[] = [
+      ...(sub.includes(RFQ) ? [this.folderGroup(loc.root, RFQ)] : []),
       ...revs.map((n) => ({
-        key: revFolderName(n),
-        label: revFolderName(n),
-        files: this.paths(`${loc.root}/${revFolderName(n)}`),
+        ...this.folderGroup(loc.root, revFolderName(n)),
         collapse: this.api.props.get(revNotePath(loc.root, loc.folder, n))?.rev_status === "superseded",
       })),
-      ...(sub.includes(PO) ? [{ key: PO, label: PO, files: this.paths(`${loc.root}/${PO}`) }] : []),
+      ...(sub.includes(PO) ? [this.folderGroup(loc.root, PO)] : []),
     ];
     const chain = ["anchor", ...revs.map(revFolderName), ...(sub.includes(PO) ? [PO] : [])];
     const edges: [string, string][] = [
       ...(sub.includes(RFQ) ? ([["anchor", RFQ]] as [string, string][]) : []),
       ...chain.slice(1).map((to, i): [string, string] => [chain[i]!, to]),
     ];
-    await this.api.canvas.sync({ canvasPath: canvasPath(loc.root, loc.folder), idPrefix: ID_PREFIX, anchor, groups, edges });
+    await this.api.canvas.sync({ canvasPath: canvasPath(loc.root, loc.folder), idPrefix: ID_PREFIX, anchor, groups, edges }, opts);
   }
 
   /**
@@ -121,8 +120,19 @@ export class RlosAdapter {
     if (Boolean(existing.archived) === active) await this.api.spaces.setArchived(existing.id, !active);
   }
 
-  private paths(folder: string): string[] {
-    return this.api.notes.list(folder, { recursive: true }).map((f) => f.path);
+  /** Group for `<root>/<key>`: its direct files, plus a nested group per non-empty subfolder (key = relative path). */
+  private folderGroup(root: string, key: string): CanvasGroupSpec {
+    const folder = `${root}/${key}`;
+    return {
+      key,
+      label: key.split("/").pop()!,
+      files: this.api.notes.list(folder).map((f) => f.path),
+      groups: this.api.notes
+        .subfolders(folder)
+        .sort((a, b) => a.localeCompare(b))
+        .filter((name) => this.api.notes.list(`${folder}/${name}`, { recursive: true }).length > 0)
+        .map((name) => this.folderGroup(root, `${key}/${name}`)),
+    };
   }
 
   private async applyNewRev(loc: ProjectLocation, n: number): Promise<void> {
