@@ -1,4 +1,4 @@
-import type { AutomationApi, CanvasGroupSpec, Frontmatter } from "../../vault-automation/src/api";
+import type { AutomationApi, CanvasGroupSpec, Frontmatter } from "vault-automation/src/api";
 import {
   canvasPath,
   locate,

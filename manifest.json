@@ -5,5 +5,6 @@
   "minAppVersion": "1.12.0",
   "description": "Project/revision/PO schema, status automation, canvas workspace sync, and layout migration for the RLOS quote vault.",
   "author": "rlabs",
-  "isDesktopOnly": true
+  "isDesktopOnly": true,
+  "authorUrl": "https://github.com/EugeneChan00"
 }

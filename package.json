@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
-    "deploy": "npm run build && node scripts/deploy.mjs"
+    "deploy": "npm run build && node scripts/deploy.mjs",
+    "release": "npm run build && node scripts/release.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
     "obsidian": "^1.14.4",
-    "typescript": "^7.0.2"
-  }
+    "typescript": "^7.0.2",
+    "vault-automation": "github:EugeneChan00/obsidian-vault-automation"
+  },
+  "repository": "github:EugeneChan00/obsidian-rlos-projects"
 }

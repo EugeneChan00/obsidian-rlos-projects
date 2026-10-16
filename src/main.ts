@@ -1,5 +1,5 @@
 import { Modal, Notice, Plugin, PluginSettingTab, Setting, type App } from "obsidian";
-import type { AutomationApi, Disposable, Validator } from "../../vault-automation/src/api";
+import type { AutomationApi, Disposable, Validator } from "vault-automation/src/api";
 import {
   KIND_FOLDERS,
   locate,
