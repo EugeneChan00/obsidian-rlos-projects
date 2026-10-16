@@ -44,7 +44,7 @@ export interface CanvasOptions {
   columns: number;
 }
 
-/** RLOS schema (policy/PROJECTS.md) expressed as rules on the schema-agnostic automation API. */
+/** RLOS schema (spaces/process/project-lifecycle.md) expressed as rules on the schema-agnostic automation API. */
 export class RlosAdapter {
   readonly id = "rlos";
 

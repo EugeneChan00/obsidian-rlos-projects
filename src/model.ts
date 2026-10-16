@@ -4,7 +4,7 @@ export const PROJECTS_ROOT = "projects";
 export const KIND_FOLDERS = ["MCCs", "Units"] as const;
 export type KindFolder = (typeof KIND_FOLDERS)[number];
 const PRODUCT_TYPE: Record<KindFolder, "MCC" | "Unit"> = { MCCs: "MCC", Units: "Unit" };
-export const SCHEMA_PATH = "policy/schemas/projects.schema.json";
+export const SCHEMA_PATH = "vault-kit/schemas/projects.schema.json";
 
 export const RFQ = "RFQ";
 export const PO = "PO";
@@ -58,9 +58,9 @@ export const wikilink = (basename: string) => `[[${basename}]]`;
 
 /** Note templates (frontmatter placeholders render as YAML scalars). */
 export const TEMPLATES = {
-  project: "policy/templates/project.md",
-  revision: "policy/templates/revision.md",
-  po: "policy/templates/po.md",
+  project: "vault-kit/templates/project.md",
+  revision: "vault-kit/templates/revision.md",
+  po: "vault-kit/templates/po.md",
 } as const;
 
 const ILLEGAL = /[\\/:*?"<>|#^[\]]/g;

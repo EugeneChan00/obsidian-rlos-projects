@@ -1,6 +1,6 @@
 # RLOS Projects
 
-RLOS quote-vault adapter for [Vault Automation](https://github.com/EugeneChan00/obsidian-vault-automation). It turns the vault's project spec (`policy/PROJECTS.md` in the vault: `PROJECT` / `RFQ/` / `Rev-N/` / `PO/`, `work_status` / `opp_status` / `rev_status`, margin) into automation rules, project canvases, and Window Spaces, and adds the `RLOS Projects:` commands and a settings tab (canvas folding and card size).
+RLOS quote-vault adapter for [Vault Automation](https://github.com/EugeneChan00/obsidian-vault-automation). It turns the vault's project spec (`spaces/process/project-lifecycle.md` in the vault: `PROJECT` / `RFQ/` / `Rev-N/` / `PO/`, `work_status` / `opp_status` / `rev_status`, margin) into automation rules, project canvases, and Window Spaces, and adds the `RLOS Projects:` commands and a settings tab (canvas folding and card size). Vault inputs: `vault-kit/schemas/projects.schema.json` (allowed values) and `vault-kit/templates/{project,revision,po}.md`.
 
 Requires **Vault Automation** (API v1). Window Spaces integration requires [Window Spaces (RLOS fork)](https://github.com/EugeneChan00/obsidian-window-spaces).
 
