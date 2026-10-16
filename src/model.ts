@@ -3,7 +3,7 @@ import { normalizePath } from "obsidian";
 export const PROJECTS_ROOT = "projects";
 export const KIND_FOLDERS = ["MCCs", "Units"] as const;
 export type KindFolder = (typeof KIND_FOLDERS)[number];
-export const PRODUCT_TYPE: Record<KindFolder, "MCC" | "Unit"> = { MCCs: "MCC", Units: "Unit" };
+const PRODUCT_TYPE: Record<KindFolder, "MCC" | "Unit"> = { MCCs: "MCC", Units: "Unit" };
 export const SCHEMA_PATH = "policy/schemas/projects.schema.json";
 
 export const RFQ = "RFQ";
@@ -46,14 +46,12 @@ export const parseRevFolder = (name: string): number | null => {
   return m ? Number(m[1]) : null;
 };
 
-export const projectNoteName = (folder: string) => `${folder} PROJECT`;
+const projectNoteName = (folder: string) => `${folder} PROJECT`;
 export const revNoteName = (folder: string, n: number) => `${folder} Rev-${n}`;
-export const poNoteName = (folder: string) => `${folder} PO`;
-export const canvasName = (folder: string) => `${folder}.canvas`;
+const canvasName = (folder: string) => `${folder}.canvas`;
 
 export const projectNotePath = (root: string, folder: string) => `${root}/${projectNoteName(folder)}.md`;
 export const revNotePath = (root: string, folder: string, n: number) => `${root}/${revFolderName(n)}/${revNoteName(folder, n)}.md`;
-export const poNotePath = (root: string, folder: string) => `${root}/${PO}/${poNoteName(folder)}.md`;
 export const canvasPath = (root: string, folder: string) => `${root}/${canvasName(folder)}`;
 
 export const wikilink = (basename: string) => `[[${basename}]]`;
