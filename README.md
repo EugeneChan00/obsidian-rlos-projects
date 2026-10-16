@@ -4,6 +4,10 @@ RLOS quote-vault adapter for [Vault Automation](https://github.com/EugeneChan00/
 
 Requires **Vault Automation** (API v1). Window Spaces integration requires [Window Spaces (RLOS fork)](https://github.com/EugeneChan00/obsidian-window-spaces).
 
+## Document names
+
+**Copy document name for current project** (command, ribbon button, or right-click *Copy document name…* inside a project folder) lists file-name templates rendered for that project and rev and copies the chosen one, extension included. Tokens: `{opp} {name} {folder} {rev} {sap} {pcbr} {po_number} {sales_order} {end_user} {site} {date} {yymmdd}`; `{rev}` is the `Rev-N` you are in, else `current_rev`. Tokens with no value are asked for and remembered per project until Obsidian restarts. Edit templates under Settings → RLOS Projects → *Document names* (`Label | extension | pattern` per line).
+
 ## Install
 
 With [BRAT](https://github.com/TfTHacker/obsidian42-brat), in this order:

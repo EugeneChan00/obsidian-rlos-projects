@@ -1,6 +1,16 @@
 import { Modal, Notice, Plugin, PluginSettingTab, Setting, type App } from "obsidian";
 import type { AutomationApi, Disposable, Validator } from "vault-automation/src/api";
 import {
+  DEFAULT_DOC_TEMPLATES,
+  DOC_TOKENS,
+  docContext,
+  DocNameModal,
+  formatDocTemplates,
+  isDocTemplate,
+  parseDocTemplates,
+  type DocTemplate,
+} from "./docnames";
+import {
   KIND_FOLDERS,
   locate,
   PROJECTS_ROOT,
@@ -21,10 +31,12 @@ const NOTE_TYPES: Record<string, true> = { project: true, revision: true, po: tr
 
 interface RlosSettings {
   canvas: CanvasOptions;
+  docNames: DocTemplate[];
 }
 
 const DEFAULT_SETTINGS: RlosSettings = {
   canvas: { foldSubfolders: true, foldSuperseded: true, cardWidth: 600, cardHeight: 800, columns: 3 },
+  docNames: DEFAULT_DOC_TEMPLATES,
 };
 
 function automationApi(app: App): AutomationApi | null {
@@ -45,6 +57,8 @@ export default class RlosProjectsPlugin extends Plugin {
   private api: AutomationApi | null = null;
   private adapter: RlosAdapter | null = null;
   private registration: Disposable | null = null;
+  /** Values typed for missing document-name tokens (e.g. sales order), per project folder, this session. */
+  private readonly docValues = new Map<string, Record<string, string>>();
 
   async onload(): Promise<void> {
     const saved: unknown = await this.loadData();
@@ -60,6 +74,8 @@ export default class RlosProjectsPlugin extends Plugin {
         if (typeof v === "number" && Number.isFinite(v) && v > 0) c[key] = v;
       }
     }
+    const savedDocs: unknown = saved && typeof saved === "object" && "docNames" in saved ? saved.docNames : null;
+    if (Array.isArray(savedDocs) && savedDocs.every(isDocTemplate)) this.settings.docNames = savedDocs;
     this.addSettingTab(new RlosSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(() => {
@@ -115,6 +131,27 @@ export default class RlosProjectsPlugin extends Plugin {
     this.addCommand({ id: "sync-all-spaces", name: "Sync window spaces for all projects", callback: () => void this.syncAllSpaces() });
     this.addCommand({ id: "check", name: "Check project frontmatter", callback: () => void this.check() });
     this.addCommand({ id: "sync-selectors", name: "Sync Custom Selectors options from schema", callback: () => void this.syncSelectors() });
+    this.addCommand({
+      id: "copy-document-name",
+      name: "Copy document name for current project",
+      checkCallback: (checking) => {
+        const path = this.app.workspace.getActiveFile()?.path ?? "";
+        if (!locate(path) || !this.api) return false;
+        if (!checking) this.copyDocumentName(path);
+        return true;
+      },
+    });
+    this.addRibbonIcon("file-signature", "Copy document name (RLOS)", () => {
+      const path = this.app.workspace.getActiveFile()?.path ?? "";
+      if (!locate(path)) new Notice("Open a note or file inside a project folder first");
+      else this.copyDocumentName(path);
+    });
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!locate(file.path)) return;
+        menu.addItem((item) => item.setTitle("Copy document name…").setIcon("file-signature").onClick(() => this.copyDocumentName(file.path)));
+      }),
+    );
   }
 
   onunload(): void {
@@ -136,6 +173,15 @@ export default class RlosProjectsPlugin extends Plugin {
       }
     }
     return out;
+  }
+
+  /** Open the document-name picker for the project (and Rev-N, if any) containing `path`. */
+  copyDocumentName(path: string): void {
+    const loc = locate(path);
+    if (!loc || !this.api) return;
+    let remembered = this.docValues.get(loc.root);
+    if (!remembered) this.docValues.set(loc.root, (remembered = {}));
+    new DocNameModal(this.app, loc, docContext(this.api, loc), this.settings.docNames, remembered).open();
   }
 
   async saveSettings(): Promise<void> {
@@ -312,6 +358,38 @@ class RlosSettingTab extends PluginSettingTab {
       .setName("Sync all project canvases")
       .setDesc("Add or remove cards to match the folders, without moving existing ones.")
       .addButton((b) => b.setButtonText("Sync now").onClick(() => void this.plugin.syncAllCanvases(false)));
+
+    new Setting(containerEl).setName("Document names").setHeading();
+    containerEl.createEl("p", {
+      text: "Templates for “Copy document name” (ribbon button, command, or right-click in a project). One per line: Label | extension | pattern. Tokens: " +
+        Object.entries(DOC_TOKENS)
+          .map(([k, v]) => `{${k}} ${v}`)
+          .join(" · "),
+      cls: "setting-item-description",
+    });
+    const area = containerEl.createEl("textarea", { cls: "rlos-docname-templates" });
+    area.rows = 12;
+    area.style.width = "100%";
+    area.style.fontFamily = "var(--font-monospace)";
+    area.value = formatDocTemplates(this.plugin.settings.docNames);
+    area.addEventListener("change", () => {
+      const { templates, invalid } = parseDocTemplates(area.value);
+      if (invalid.length) {
+        new Notice(`Not saved — each line needs Label | extension | pattern:\n${invalid.join("\n")}`);
+        return;
+      }
+      this.plugin.settings.docNames = templates;
+      void this.plugin.saveSettings();
+    });
+    new Setting(containerEl)
+      .setName("Restore default document names")
+      .addButton((b) =>
+        b.setButtonText("Restore defaults").onClick(async () => {
+          this.plugin.settings.docNames = structuredClone(DEFAULT_DOC_TEMPLATES);
+          await this.plugin.saveSettings();
+          area.value = formatDocTemplates(this.plugin.settings.docNames);
+        }),
+      );
   }
 }
 
