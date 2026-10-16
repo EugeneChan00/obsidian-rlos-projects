@@ -21,13 +21,11 @@ const CANVAS_DEBOUNCE_MS = 1500;
 const ID_PREFIX = "rlos-";
 const LIVE_OPP: Record<string, true> = { open: true, submitted: true, revising: true, "post-sales": true };
 const PRICING_KEYS = ["list_price", "multiplier", "sell_price", "cost"];
-/** Window Spaces section per work_status. */
+/** Window Spaces section per work_status; only these statuses keep an active space. */
 const SECTION_BY_WORK: Record<string, string> = {
-  backlog: "Backlog",
   todo: "Todo",
   "in-progress": "In Progress",
   "in-review": "In Review",
-  done: "Done",
 };
 
 const isType = (type: string) => (fm: Frontmatter) => fm.type === type;
@@ -104,20 +102,23 @@ export class RlosAdapter {
     await this.api.canvas.sync({ canvasPath: canvasPath(loc.root, loc.folder), idPrefix: ID_PREFIX, anchor, groups, edges });
   }
 
-  /** Mirror statuses onto the project's Window Space: live projects get one in their work_status section. */
+  /**
+   * Mirror statuses onto the project's Window Space: a live opportunity in todo / in-progress /
+   * in-review has an active space in that section; any other state archives an existing space.
+   */
   async syncSpace(projectPath: string, fm: Frontmatter): Promise<void> {
     const loc = locate(projectPath);
     const project = this.api.notes.file(projectPath);
     if (!loc || !project || !this.api.spaces.available()) return;
-    const section = SECTION_BY_WORK[String(fm.work_status)] ?? SECTION_BY_WORK.backlog!;
-    const live = Boolean(LIVE_OPP[String(fm.opp_status)]);
+    const section = SECTION_BY_WORK[String(fm.work_status)];
+    const active = Boolean(LIVE_OPP[String(fm.opp_status)]) && section !== undefined;
     const existing = this.api.spaces.find(loc.folder);
     if (!existing) {
-      if (live) await this.api.spaces.ensure(this.api.notes.file(canvasPath(loc.root, loc.folder)) ?? project, { name: loc.folder, section });
+      if (active) await this.api.spaces.ensure(this.api.notes.file(canvasPath(loc.root, loc.folder)) ?? project, { name: loc.folder, section });
       return;
     }
-    if (existing.sections?.[0] !== section) await this.api.spaces.setSection(existing.id, section);
-    if (Boolean(existing.archived) === live) await this.api.spaces.setArchived(existing.id, !live);
+    if (active && existing.sections?.[0] !== section) await this.api.spaces.setSection(existing.id, section);
+    if (Boolean(existing.archived) === active) await this.api.spaces.setArchived(existing.id, !active);
   }
 
   private paths(folder: string): string[] {
