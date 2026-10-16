@@ -44,9 +44,15 @@ export default class RlosProjectsPlugin extends Plugin {
         new Notice("RLOS Projects needs the Vault Automation plugin (API v1) enabled");
         return;
       }
-      const adapter = new RlosAdapter(this.api);
-      this.adapter = adapter;
-      this.registration = this.api.registerAdapter({ id: adapter.id, activate: () => adapter.activate() });
+      // The adapter must subscribe through the scoped api handed to activate(), so the engine
+      // removes its subscriptions when this plugin unloads or reloads.
+      this.registration = this.api.registerAdapter({
+        id: "rlos",
+        activate: (scoped) => {
+          this.adapter = new RlosAdapter(scoped);
+          this.adapter.activate();
+        },
+      });
     });
 
     this.addCommand({ id: "new-project", name: "New project", callback: () => new NewProjectModal(this.app, (k, o, n) => this.newProject(k, o, n)).open() });
