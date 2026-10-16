@@ -1,4 +1,4 @@
-import { Modal, Notice, Plugin, Setting, type App } from "obsidian";
+import { Modal, Notice, Plugin, PluginSettingTab, Setting, type App } from "obsidian";
 import type { AutomationApi, Disposable, Validator } from "../../vault-automation/src/api";
 import {
   KIND_FOLDERS,
@@ -14,10 +14,18 @@ import {
   type KindFolder,
   type ProjectLocation,
 } from "./model";
-import { RlosAdapter } from "./rules";
+import { RlosAdapter, type CanvasOptions } from "./rules";
 
 const CHECK_REPORT = "spaces/reports/RLOS Check.md";
 const NOTE_TYPES: Record<string, true> = { project: true, revision: true, po: true };
+
+interface RlosSettings {
+  canvas: CanvasOptions;
+}
+
+const DEFAULT_SETTINGS: RlosSettings = {
+  canvas: { foldSubfolders: true, foldSuperseded: true },
+};
 
 function automationApi(app: App): AutomationApi | null {
   // `app.plugins` is undocumented; narrow each hop instead of trusting a shape.
@@ -33,11 +41,21 @@ function automationApi(app: App): AutomationApi | null {
 
 /** RLOS adapter: registers the RLOS rules with vault-automation and provides RLOS commands. */
 export default class RlosProjectsPlugin extends Plugin {
+  settings: RlosSettings = structuredClone(DEFAULT_SETTINGS);
   private api: AutomationApi | null = null;
   private adapter: RlosAdapter | null = null;
   private registration: Disposable | null = null;
 
   async onload(): Promise<void> {
+    const saved: unknown = await this.loadData();
+    const savedCanvas: unknown = saved && typeof saved === "object" && "canvas" in saved ? saved.canvas : null;
+    if (savedCanvas && typeof savedCanvas === "object") {
+      const c = this.settings.canvas;
+      if ("foldSubfolders" in savedCanvas && typeof savedCanvas.foldSubfolders === "boolean") c.foldSubfolders = savedCanvas.foldSubfolders;
+      if ("foldSuperseded" in savedCanvas && typeof savedCanvas.foldSuperseded === "boolean") c.foldSuperseded = savedCanvas.foldSuperseded;
+    }
+    this.addSettingTab(new RlosSettingTab(this.app, this));
+
     this.app.workspace.onLayoutReady(() => {
       this.api = automationApi(this.app);
       if (!this.api) {
@@ -49,7 +67,7 @@ export default class RlosProjectsPlugin extends Plugin {
       this.registration = this.api.registerAdapter({
         id: "rlos",
         activate: (scoped) => {
-          this.adapter = new RlosAdapter(scoped);
+          this.adapter = new RlosAdapter(scoped, () => this.settings.canvas);
           this.adapter.activate();
         },
       });
@@ -114,9 +132,17 @@ export default class RlosProjectsPlugin extends Plugin {
     return out;
   }
 
-  private async syncAllCanvases(rebuild: boolean): Promise<void> {
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+
+  async syncAllCanvases(rebuild: boolean): Promise<void> {
+    if (!this.adapter) {
+      new Notice("RLOS automation is not active (Vault Automation plugin missing?)");
+      return;
+    }
     const locs = this.projectLocations();
-    for (const loc of locs) await this.adapter!.syncCanvas(loc, { rebuild });
+    for (const loc of locs) await this.adapter.syncCanvas(loc, { rebuild });
     new Notice(`${rebuild ? "Rebuilt" : "Synced"} ${locs.length} canvases`);
   }
 
@@ -216,6 +242,43 @@ export default class RlosProjectsPlugin extends Plugin {
     Reflect.set(cs, "settings", { selectors });
     await cs.saveSettings.call(cs);
     new Notice("Custom Selectors options synced from schema");
+  }
+}
+
+class RlosSettingTab extends PluginSettingTab {
+  constructor(
+    app: App,
+    private readonly plugin: RlosProjectsPlugin,
+  ) {
+    super(app, plugin);
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+    new Setting(containerEl).setName("Project canvas").setHeading();
+    containerEl.createEl("p", {
+      text: "RFQ, PO and current Rev-N groups stay open. These switches decide which groups the canvas folds on its own. A group you fold or unfold by hand keeps your choice.",
+      cls: "setting-item-description",
+    });
+    const toggle = (name: string, desc: string, key: keyof CanvasOptions) =>
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.canvas[key]).onChange(async (value) => {
+            this.plugin.settings.canvas[key] = value;
+            await this.plugin.saveSettings();
+            new Notice("Applying to all project canvases…");
+            await this.plugin.syncAllCanvases(false);
+          }),
+        );
+    toggle("Fold subfolder groups", "Groups for subfolders inside RFQ, Rev-N and PO start folded. Off: unfold the ones the canvas folded.", "foldSubfolders");
+    toggle("Fold superseded revisions", "A Rev-N group folds once its rev is superseded. Off: unfold the ones the canvas folded.", "foldSuperseded");
+    new Setting(containerEl)
+      .setName("Apply to all project canvases")
+      .setDesc("Re-sync every project canvas with the current settings.")
+      .addButton((b) => b.setButtonText("Apply now").onClick(() => void this.plugin.syncAllCanvases(false)));
   }
 }
 

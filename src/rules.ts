@@ -31,11 +31,22 @@ const SECTION_BY_WORK: Record<string, string> = {
 const isType = (type: string) => (fm: Frontmatter) => fm.type === type;
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
+/** Canvas folding preferences (plugin settings → Project canvas). */
+export interface CanvasOptions {
+  /** Fold subfolder groups inside RFQ / Rev-N / PO. */
+  foldSubfolders: boolean;
+  /** Fold a Rev-N group once its rev is superseded. */
+  foldSuperseded: boolean;
+}
+
 /** RLOS schema (policy/PROJECTS.md) expressed as rules on the schema-agnostic automation API. */
 export class RlosAdapter {
   readonly id = "rlos";
 
-  constructor(private readonly api: AutomationApi) {}
+  constructor(
+    private readonly api: AutomationApi,
+    private readonly canvasOptions: () => CanvasOptions,
+  ) {}
 
   activate(): void {
     const { api } = this;
@@ -89,7 +100,7 @@ export class RlosAdapter {
       ...(sub.includes(RFQ) ? [this.folderGroup(loc.root, RFQ)] : []),
       ...revs.map((n) => ({
         ...this.folderGroup(loc.root, revFolderName(n)),
-        collapse: this.api.props.get(revNotePath(loc.root, loc.folder, n))?.rev_status === "superseded",
+        collapse: this.canvasOptions().foldSuperseded && this.api.props.get(revNotePath(loc.root, loc.folder, n))?.rev_status === "superseded",
       })),
       ...(sub.includes(PO) ? [this.folderGroup(loc.root, PO)] : []),
     ];
@@ -131,7 +142,7 @@ export class RlosAdapter {
         .subfolders(folder)
         .sort((a, b) => a.localeCompare(b))
         .filter((name) => this.api.notes.list(`${folder}/${name}`, { recursive: true }).length > 0)
-        .map((name) => this.folderGroup(root, `${key}/${name}`)),
+        .map((name) => ({ ...this.folderGroup(root, `${key}/${name}`), collapse: this.canvasOptions().foldSubfolders })),
     };
   }
 
