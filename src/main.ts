@@ -57,7 +57,7 @@ export default class RlosProjectsPlugin extends Plugin {
   private api: AutomationApi | null = null;
   private adapter: RlosAdapter | null = null;
   private registration: Disposable | null = null;
-  /** Values typed for missing document-name tokens (e.g. sales order), per project folder, this session. */
+  /** Values typed for missing document-name tokens, keyed `<project root>#<rev>`, this session. */
   private readonly docValues = new Map<string, Record<string, string>>();
 
   async onload(): Promise<void> {
@@ -179,9 +179,12 @@ export default class RlosProjectsPlugin extends Plugin {
   copyDocumentName(path: string): void {
     const loc = locate(path);
     if (!loc || !this.api) return;
-    let remembered = this.docValues.get(loc.root);
-    if (!remembered) this.docValues.set(loc.root, (remembered = {}));
-    new DocNameModal(this.app, loc, docContext(this.api, loc), this.settings.docNames, remembered).open();
+    const { vars, suggested } = docContext(this.api, loc);
+    // Typed values (SAP quote, sales order) belong to one rev, so they are remembered per project + rev.
+    const key = `${loc.root}#${vars.rev}`;
+    let remembered = this.docValues.get(key);
+    if (!remembered) this.docValues.set(key, (remembered = {}));
+    new DocNameModal(this.app, loc, vars, suggested, this.settings.docNames, remembered).open();
   }
 
   async saveSettings(): Promise<void> {

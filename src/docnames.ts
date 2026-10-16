@@ -64,8 +64,15 @@ export function isDocTemplate(v: unknown): v is DocTemplate {
 const scalar = (v: unknown): string => (typeof v === "string" || typeof v === "number" ? String(v).trim() : "");
 const digits = (v: unknown): string => scalar(v).replace(/\D/g, "");
 
-/** Token values for one project folder; empty string = unknown. */
-export function docContext(api: AutomationApi, loc: ProjectLocation): Record<string, string> {
+export interface DocContext {
+  /** Token values; empty string = unknown (asked for). */
+  vars: Record<string, string>;
+  /** Prefill for asked tokens: a likely value that must still be confirmed. */
+  suggested: Record<string, string>;
+}
+
+/** Token values for one project folder. */
+export function docContext(api: AutomationApi, loc: ProjectLocation): DocContext {
   const project = api.props.get(projectNotePath(loc.root, loc.folder)) ?? {};
   const currentRev = /Rev-(\d+)\]\]$/.exec(scalar(project.current_rev));
   const revs = api.notes.subfolders(loc.root).map(parseRevFolder).filter((n): n is number => n !== null);
@@ -77,12 +84,13 @@ export function docContext(api: AutomationApi, loc: ProjectLocation): Record<str
     .map((f) => api.props.get(f.path) ?? {})
     .find((fm) => fm.type === "po") ?? {};
   const date = today();
-  return {
+  const vars = {
     opp: digits(project.opp) || loc.folder.split(" ")[0]!,
     name: scalar(project.name) || loc.folder.replace(/^\S+\s*/, ""),
     folder: loc.folder,
     rev: rev === null ? "" : String(rev),
-    sap: digits(revFm.sap) || digits(project.sapq),
+    // A rev can carry its own SAP quote; the project-level `sapq` may belong to another rev, so it is only a prefill.
+    sap: digits(revFm.sap),
     pcbr: digits(revFm.pcbr) || digits(project.pcbr),
     po_number: scalar(po.po_number),
     sales_order: digits(po.sales_order),
@@ -91,6 +99,7 @@ export function docContext(api: AutomationApi, loc: ProjectLocation): Record<str
     date,
     yymmdd: date.slice(2).replace(/-/g, ""),
   };
+  return { vars, suggested: { sap: digits(project.sapq) } };
 }
 
 export function tokensOf(pattern: string): string[] {
@@ -108,8 +117,9 @@ export class DocNameModal extends SuggestModal<DocTemplate> {
     app: App,
     loc: ProjectLocation,
     private readonly vars: Record<string, string>,
+    private readonly suggested: Record<string, string>,
     private readonly templates: DocTemplate[],
-    /** Values typed for missing tokens, kept for the session per project folder. */
+    /** Values typed for missing tokens, kept for the session per project + rev. */
     private readonly remembered: Record<string, string>,
   ) {
     super(app);
@@ -145,7 +155,7 @@ export class DocNameModal extends SuggestModal<DocTemplate> {
       void copyName(renderDocName(t, vars));
       return;
     }
-    new MissingValuesModal(this.app, t.label, missing, (filled) => {
+    new MissingValuesModal(this.app, t.label, missing, this.suggested, (filled) => {
       Object.assign(this.remembered, filled);
       void copyName(renderDocName(t, { ...vars, ...filled }));
     }).open();
@@ -164,6 +174,7 @@ class MissingValuesModal extends Modal {
     app: App,
     private readonly label: string,
     private readonly keys: string[],
+    private readonly suggested: Record<string, string>,
     private readonly submit: (values: Record<string, string>) => void,
   ) {
     super(app);
@@ -182,13 +193,16 @@ class MissingValuesModal extends Modal {
     this.keys.forEach((k, i) =>
       new Setting(this.contentEl)
         .setName(k)
-        .setDesc(DOC_TOKENS[k] ?? "")
+        .setDesc(this.suggested[k] ? `${DOC_TOKENS[k] ?? ""} — prefilled from the project; confirm it matches this rev` : (DOC_TOKENS[k] ?? ""))
         .addText((t) => {
+          const prefill = this.suggested[k] ?? "";
+          t.setValue(prefill);
+          this.values[k] = prefill;
           t.onChange((v) => (this.values[k] = v));
           t.inputEl.addEventListener("keydown", (e) => {
             if (e.key === "Enter") done();
           });
-          if (i === 0) window.setTimeout(() => t.inputEl.focus(), 0);
+          if (i === 0) window.setTimeout(() => t.inputEl.select(), 0);
         }),
     );
     new Setting(this.contentEl).addButton((b) => b.setButtonText("Copy name").setCta().onClick(done));
