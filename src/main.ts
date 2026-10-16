@@ -2,14 +2,31 @@ import { Modal, Notice, Plugin, PluginSettingTab, Setting, type App } from "obsi
 import type { AutomationApi, Disposable, Validator } from "vault-automation/src/api";
 import {
   DEFAULT_DOC_TEMPLATES,
-  DOC_TOKENS,
-  docContext,
+  docSlug,
   DocNameModal,
   formatDocTemplates,
   isDocTemplate,
   parseDocTemplates,
+  runTemplate,
+  validateTemplates,
+  type DocRunner,
   type DocTemplate,
 } from "./docnames";
+import {
+  BUILTIN_TOKENS,
+  buildPropertyIndex,
+  DEFAULT_FIELDS,
+  isFieldBinding,
+  NOTE_KINDS,
+  registerPropertyTypes,
+  resolveFields,
+  saveBack,
+  validateFields,
+  type FieldBinding,
+  type Issue,
+  type NoteKind,
+  type PropertyIndex,
+} from "./fields";
 import {
   KIND_FOLDERS,
   locate,
@@ -24,7 +41,9 @@ import {
   type KindFolder,
   type ProjectLocation,
 } from "./model";
+import { syncQuickAddMenu, type MenuEntry } from "./quickmenu";
 import { RlosAdapter, type CanvasOptions } from "./rules";
+import { ChangeStatusModal } from "./status";
 
 const CHECK_REPORT = "spaces/reports/RLOS Check.md";
 const NOTE_TYPES: Record<string, true> = { project: true, revision: true, po: true };
@@ -32,12 +51,19 @@ const NOTE_TYPES: Record<string, true> = { project: true, revision: true, po: tr
 interface RlosSettings {
   canvas: CanvasOptions;
   docNames: DocTemplate[];
+  fields: FieldBinding[];
+  /** Write values typed for missing tokens back to their bound properties. */
+  saveTyped: boolean;
 }
 
 const DEFAULT_SETTINGS: RlosSettings = {
   canvas: { foldSubfolders: true, foldSuperseded: true, cardWidth: 600, cardHeight: 800, columns: 3 },
   docNames: DEFAULT_DOC_TEMPLATES,
+  fields: DEFAULT_FIELDS,
+  saveTyped: true,
 };
+
+const NOT_IN_PROJECT = "Open a note or file inside a project folder first";
 
 function automationApi(app: App): AutomationApi | null {
   // `app.plugins` is undocumented; narrow each hop instead of trusting a shape.
@@ -59,6 +85,10 @@ export default class RlosProjectsPlugin extends Plugin {
   private registration: Disposable | null = null;
   /** Values typed for missing document-name tokens, keyed `<project root>#<rev>`, this session. */
   private readonly docValues = new Map<string, Record<string, string>>();
+  /** Ids of the per-template `doc-*` commands currently registered. */
+  private docCommandIds: string[] = [];
+  /** Problems in the saved document-name configuration, shown in settings. */
+  configIssues: Issue[] = [];
 
   async onload(): Promise<void> {
     const saved: unknown = await this.loadData();
@@ -76,6 +106,12 @@ export default class RlosProjectsPlugin extends Plugin {
     }
     const savedDocs: unknown = saved && typeof saved === "object" && "docNames" in saved ? saved.docNames : null;
     if (Array.isArray(savedDocs) && savedDocs.every(isDocTemplate)) this.settings.docNames = savedDocs;
+    else if (savedDocs !== null) this.configIssues.push({ level: "error", where: "load", message: "Saved document names were malformed; defaults are in use until you save." });
+    const savedFields: unknown = saved && typeof saved === "object" && "fields" in saved ? saved.fields : null;
+    if (Array.isArray(savedFields) && savedFields.every(isFieldBinding)) this.settings.fields = savedFields;
+    else if (savedFields !== null) this.configIssues.push({ level: "error", where: "load", message: "Saved fields were malformed; defaults are in use until you save." });
+    const savedTyped: unknown = saved && typeof saved === "object" && "saveTyped" in saved ? saved.saveTyped : null;
+    if (typeof savedTyped === "boolean") this.settings.saveTyped = savedTyped;
     this.addSettingTab(new RlosSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(() => {
@@ -93,17 +129,23 @@ export default class RlosProjectsPlugin extends Plugin {
           this.adapter.activate();
         },
       });
+      this.registerDocCommands();
+      const index = buildPropertyIndex(this.app, this.api);
+      this.configIssues.push(...validateFields(this.settings.fields, index), ...validateTemplates(this.settings.docNames, this.settings.fields));
+      if (this.configIssues.some((i) => i.level === "error")) new Notice("RLOS Projects: document-name settings have errors — see Settings → RLOS Projects", 8000);
+      else registerPropertyTypes(this.app, this.settings.fields, index);
+      void this.syncMenu(false);
     });
 
     this.addCommand({ id: "new-project", name: "New project", callback: () => new NewProjectModal(this.app, (k, o, n) => this.newProject(k, o, n)).open() });
     this.addCommand({
       id: "new-revision",
       name: "New revision for current project",
-      checkCallback: (checking) => {
+      callback: () => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || !locate(file.path) || !this.adapter) return false;
-        if (!checking) void this.newRevision(file.path);
-        return true;
+        if (!file || !locate(file.path)) new Notice(NOT_IN_PROJECT);
+        else if (!this.adapter) new Notice("RLOS automation is not active (Vault Automation plugin missing?)");
+        else void this.newRevision(file.path);
       },
     });
     this.addCommand({
@@ -131,21 +173,10 @@ export default class RlosProjectsPlugin extends Plugin {
     this.addCommand({ id: "sync-all-spaces", name: "Sync window spaces for all projects", callback: () => void this.syncAllSpaces() });
     this.addCommand({ id: "check", name: "Check project frontmatter", callback: () => void this.check() });
     this.addCommand({ id: "sync-selectors", name: "Sync Custom Selectors options from schema", callback: () => void this.syncSelectors() });
-    this.addCommand({
-      id: "copy-document-name",
-      name: "Copy document name for current project",
-      checkCallback: (checking) => {
-        const path = this.app.workspace.getActiveFile()?.path ?? "";
-        if (!locate(path) || !this.api) return false;
-        if (!checking) this.copyDocumentName(path);
-        return true;
-      },
-    });
-    this.addRibbonIcon("file-signature", "Copy document name (RLOS)", () => {
-      const path = this.app.workspace.getActiveFile()?.path ?? "";
-      if (!locate(path)) new Notice("Open a note or file inside a project folder first");
-      else this.copyDocumentName(path);
-    });
+    this.addCommand({ id: "copy-document-name", name: "Copy document name for current project", callback: () => this.copyDocumentName(this.activePath()) });
+    this.addCommand({ id: "change-status", name: "Change status for current project", callback: () => void this.changeStatus(this.activePath()) });
+    this.addCommand({ id: "sync-quick-menu", name: "Sync Alt+Q (QuickAdd) menu", callback: () => void this.syncMenu(true) });
+    this.addRibbonIcon("file-signature", "Copy document name (RLOS)", () => this.copyDocumentName(this.activePath()));
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (!locate(file.path)) return;
@@ -175,16 +206,116 @@ export default class RlosProjectsPlugin extends Plugin {
     return out;
   }
 
-  /** Open the document-name picker for the project (and Rev-N, if any) containing `path`. */
-  copyDocumentName(path: string): void {
+  private activePath(): string {
+    return this.app.workspace.getActiveFile()?.path ?? "";
+  }
+
+  /** Context for the project (and Rev-N, if any) containing `path`, plus this session's typed values. */
+  private docRunner(path: string): DocRunner | null {
     const loc = locate(path);
-    if (!loc || !this.api) return;
-    const { vars, suggested } = docContext(this.api, loc);
+    if (!loc) {
+      new Notice(NOT_IN_PROJECT);
+      return null;
+    }
+    if (!this.api) {
+      new Notice("RLOS Projects needs the Vault Automation plugin (API v1) enabled");
+      return null;
+    }
+    const api = this.api;
+    const ctx = resolveFields(api, loc, this.settings.fields);
     // Typed values (SAP quote, sales order) belong to one rev, so they are remembered per project + rev.
-    const key = `${loc.root}#${vars.rev}`;
+    const key = `${loc.root}#${ctx.rev ?? ""}`;
     let remembered = this.docValues.get(key);
     if (!remembered) this.docValues.set(key, (remembered = {}));
-    new DocNameModal(this.app, loc, vars, suggested, this.settings.docNames, remembered).open();
+    return {
+      ctx,
+      remembered,
+      onTyped: async (typed) => {
+        if (!this.settings.saveTyped) return;
+        const { saved, skipped } = await saveBack(this.app, api, ctx, this.settings.fields, typed);
+        if (saved.length) new Notice(`Saved ${saved.join(", ")}`);
+        if (skipped.length) new Notice(`Not saved: ${skipped.join("; ")}`, 6000);
+      },
+    };
+  }
+
+  /** Open the document-name picker for the project containing `path`. */
+  copyDocumentName(path: string): void {
+    const run = this.docRunner(path);
+    if (run) new DocNameModal(this.app, this.settings.docNames, run).open();
+  }
+
+  private async changeStatus(path: string): Promise<void> {
+    const run = this.docRunner(path);
+    if (!run || !this.api) return;
+    new ChangeStatusModal(this.app, this.api, run.ctx, await this.api.schema.load(SCHEMA_PATH)).open();
+  }
+
+  /** One `doc-<slug>` command per template, so each can be bound to a hotkey or the Alt+Q menu. */
+  private registerDocCommands(): void {
+    for (const id of this.docCommandIds) this.removeCommand(id);
+    this.docCommandIds = [];
+    for (const t of this.settings.docNames) {
+      const id = `doc-${docSlug(t.label)}`;
+      if (this.docCommandIds.includes(id)) continue;
+      this.addCommand({
+        id,
+        name: `Copy document name: ${t.label}`,
+        callback: () => {
+          const run = this.docRunner(this.activePath());
+          if (run) runTemplate(this.app, t, run);
+        },
+      });
+      this.docCommandIds.push(id);
+    }
+  }
+
+  private menuEntries(): MenuEntry[] {
+    const cmd = (id: string, name: string, command: string): MenuEntry => ({ id: `rlos-${id}`, name, step: { type: "Obsidian", commandId: `${this.manifest.id}:${command}` } });
+    return [
+      cmd("new-project", "New Project", "new-project"),
+      cmd("new-revision", "New Revision", "new-revision"),
+      cmd("change-status", "Change Status", "change-status"),
+      { id: "rlos-add-task", name: "Add Task", step: { type: "UserScript", path: "vault-kit/scripts/add_task.js" } },
+      cmd("copy-document-name", "Copy Document Name…", "copy-document-name"),
+      ...this.settings.docNames.map((t) => cmd(`doc-${docSlug(t.label)}`, `Doc Name: ${t.label}`, `doc-${docSlug(t.label)}`)),
+    ];
+  }
+
+  /** Keep the RLOS entries in QuickAdd's Alt+Q menu in step with the commands and templates. */
+  async syncMenu(report: boolean): Promise<void> {
+    try {
+      const result = await syncQuickAddMenu(this.app, this.menuEntries());
+      if (report || result === "updated")
+        new Notice(
+          result === "quickadd-missing"
+            ? "QuickAdd is not installed; the Alt+Q menu needs it (Community plugins → QuickAdd)"
+            : result === "updated"
+              ? "Alt+Q (QuickAdd) menu updated with RLOS entries"
+              : "Alt+Q (QuickAdd) menu already up to date",
+        );
+    } catch (e) {
+      new Notice(`Alt+Q menu not updated: ${e instanceof Error ? e.message : String(e)}`, 8000);
+    }
+  }
+
+  propertyIndex(): PropertyIndex | null {
+    return this.api ? buildPropertyIndex(this.app, this.api) : null;
+  }
+
+  /** Validate and apply fields + templates. Nothing is saved while any error remains. */
+  async applyDocConfig(fields: FieldBinding[], templates: DocTemplate[]): Promise<Issue[]> {
+    const index = this.propertyIndex();
+    const issues = [...(index ? validateFields(fields, index) : []), ...validateTemplates(templates, fields)];
+    if (issues.some((i) => i.level === "error")) return issues;
+    this.settings.fields = fields;
+    this.settings.docNames = templates;
+    this.configIssues = [];
+    await this.saveSettings();
+    if (index) registerPropertyTypes(this.app, fields, index);
+    this.registerDocCommands();
+    await this.syncMenu(false);
+    return issues;
   }
 
   async saveSettings(): Promise<void> {
@@ -362,37 +493,210 @@ class RlosSettingTab extends PluginSettingTab {
       .setDesc("Add or remove cards to match the folders, without moving existing ones.")
       .addButton((b) => b.setButtonText("Sync now").onClick(() => void this.plugin.syncAllCanvases(false)));
 
+    this.renderDocConfig(containerEl);
+  }
+
+  // Draft of the document-name configuration; applied (validated + saved) after each edit.
+  private fields: FieldBinding[] = [];
+  private templatesText = "";
+  private index: PropertyIndex | null = null;
+  private fieldIssueEls: HTMLElement[] = [];
+  private templateIssuesEl: HTMLElement | null = null;
+  private statusEl: HTMLElement | null = null;
+  private fieldsEl: HTMLElement | null = null;
+
+  private renderDocConfig(containerEl: HTMLElement): void {
+    this.fields = structuredClone(this.plugin.settings.fields);
+    this.templatesText = formatDocTemplates(this.plugin.settings.docNames);
+    this.index = this.plugin.propertyIndex();
+
     new Setting(containerEl).setName("Document names").setHeading();
     containerEl.createEl("p", {
-      text: "Templates for “Copy document name” (ribbon button, command, or right-click in a project). One per line: Label | extension | pattern. Tokens: " +
-        Object.entries(DOC_TOKENS)
-          .map(([k, v]) => `{${k}} ${v}`)
-          .join(" · "),
       cls: "setting-item-description",
+      text: "“Copy document name” (ribbon button, Alt+Q menu, command, or right-click in a project) renders these templates for the current project and rev. Changes save as soon as they are valid; while anything below is red, the last valid configuration stays in use.",
     });
-    const area = containerEl.createEl("textarea", { cls: "rlos-docname-templates" });
-    area.rows = 12;
-    area.style.width = "100%";
-    area.style.fontFamily = "var(--font-monospace)";
-    area.value = formatDocTemplates(this.plugin.settings.docNames);
-    area.addEventListener("change", () => {
-      const { templates, invalid } = parseDocTemplates(area.value);
-      if (invalid.length) {
-        new Notice(`Not saved — each line needs Label | extension | pattern:\n${invalid.join("\n")}`);
-        return;
-      }
-      this.plugin.settings.docNames = templates;
-      void this.plugin.saveSettings();
-    });
+    this.statusEl = containerEl.createDiv({ cls: "setting-item-description" });
+    for (const issue of this.plugin.configIssues.filter((i) => i.where === "load")) this.issueLine(containerEl, issue);
+
+    new Setting(containerEl).setName("Fields").setDesc(
+      `Each {token} reads one property from the project, the rev (Rev-N you are in, else current_rev) or the PO note. Property names are frontmatter keys and are case-sensitive; the suggestions list the exact keys your notes use. Built-in tokens: ${Object.entries(BUILTIN_TOKENS)
+        .map(([k, v]) => `{${k}} ${v}`)
+        .join(" · ")}.`,
+    );
+    if (!this.index) containerEl.createDiv({ cls: "mod-warning", text: "Vault Automation is not active, so property names cannot be checked against your notes." });
+    this.datalists(containerEl);
+    this.fieldsEl = containerEl.createDiv();
+    this.renderFields();
     new Setting(containerEl)
-      .setName("Restore default document names")
       .addButton((b) =>
-        b.setButtonText("Restore defaults").onClick(async () => {
-          this.plugin.settings.docNames = structuredClone(DEFAULT_DOC_TEMPLATES);
-          await this.plugin.saveSettings();
-          area.value = formatDocTemplates(this.plugin.settings.docNames);
+        b.setButtonText("Add field").onClick(() => {
+          this.fields.push({ token: "", note: "project", property: "", digits: false, prefill: "" });
+          this.renderFields();
+          void this.apply();
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText("Restore default fields").onClick(() => {
+          this.fields = structuredClone(DEFAULT_FIELDS);
+          this.renderFields();
+          void this.apply();
         }),
       );
+    new Setting(containerEl)
+      .setName("Save typed values to notes")
+      .setDesc("When a value is missing (SAP quote on the rev, sales order on the PO) and you type it, write it to the bound property so you only type it once.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.saveTyped).onChange(async (v) => {
+          this.plugin.settings.saveTyped = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl).setName("Templates").setDesc("One per line: Label | extension | pattern, e.g. Proposal | docx | {opp} {name} Rev {rev}");
+    const area = containerEl.createEl("textarea", { cls: "rlos-docname-templates" });
+    area.rows = 10;
+    area.style.width = "100%";
+    area.style.fontFamily = "var(--font-monospace)";
+    area.value = this.templatesText;
+    area.addEventListener("input", () => {
+      this.templatesText = area.value;
+      this.showIssues(this.validate());
+    });
+    area.addEventListener("change", () => void this.apply());
+    this.templateIssuesEl = containerEl.createDiv();
+    new Setting(containerEl)
+      .addButton((b) =>
+        b.setButtonText("Restore default templates").onClick(() => {
+          this.templatesText = area.value = formatDocTemplates(DEFAULT_DOC_TEMPLATES);
+          void this.apply();
+        }),
+      )
+      .addButton((b) => b.setButtonText("Sync Alt+Q menu").onClick(() => void this.plugin.syncMenu(true)));
+    this.showIssues(this.validate());
+  }
+
+  /** `<datalist>`s of exact property keys per note kind (most used first) for the property inputs. */
+  private datalists(containerEl: HTMLElement): void {
+    for (const kind of NOTE_KINDS) {
+      const list = containerEl.createEl("datalist", { attr: { id: `rlos-props-${kind}` } });
+      const keys = this.index ? [...this.index.keys[kind].entries()].sort((a, b) => b[1] - a[1]) : [];
+      for (const [k, n] of keys) list.createEl("option", { attr: { value: k, label: `${n} ${kind} notes` } });
+    }
+    const prefill = containerEl.createEl("datalist", { attr: { id: "rlos-prefill" } });
+    for (const k of Object.keys(BUILTIN_TOKENS)) prefill.createEl("option", { attr: { value: k, label: "built-in" } });
+    for (const [k, n] of this.index ? [...this.index.keys.project.entries()].sort((a, b) => b[1] - a[1]) : [])
+      prefill.createEl("option", { attr: { value: k, label: `${n} project notes` } });
+  }
+
+  private renderFields(): void {
+    const el = this.fieldsEl;
+    if (!el) return;
+    el.empty();
+    this.fieldIssueEls = [];
+    this.fields.forEach((f, i) => {
+      const row = new Setting(el).setClass("rlos-field-row");
+      row.addText((t) => {
+        t.setPlaceholder("token").setValue(f.token).onChange((v) => {
+          f.token = v;
+          this.showIssues(this.validate());
+        });
+        t.inputEl.size = 12;
+        t.inputEl.addEventListener("change", () => void this.apply());
+      });
+      row.addDropdown((d) =>
+        d
+          .addOptions({ project: "project", revision: "rev", po: "PO" })
+          .setValue(f.note)
+          .onChange((v) => {
+            f.note = (NOTE_KINDS as readonly string[]).includes(v) ? (v as NoteKind) : "project";
+            const input = row.controlEl.querySelector<HTMLInputElement>("input.rlos-prop");
+            input?.setAttr("list", `rlos-props-${f.note}`);
+            void this.apply();
+          }),
+      );
+      row.addText((t) => {
+        t.setPlaceholder("property").setValue(f.property).onChange((v) => {
+          f.property = v;
+          this.showIssues(this.validate());
+        });
+        t.inputEl.addClass("rlos-prop");
+        t.inputEl.setAttr("list", `rlos-props-${f.note}`);
+        t.inputEl.size = 14;
+        t.inputEl.addEventListener("change", () => void this.apply());
+      });
+      row.addText((t) => {
+        t.setPlaceholder("prefill (optional)").setValue(f.prefill).onChange((v) => {
+          f.prefill = v;
+          this.showIssues(this.validate());
+        });
+        t.inputEl.setAttr("list", "rlos-prefill");
+        t.inputEl.size = 12;
+        t.inputEl.addEventListener("change", () => void this.apply());
+      });
+      row.addToggle((t) =>
+        t
+          .setTooltip("Digits only")
+          .setValue(f.digits)
+          .onChange((v) => {
+            f.digits = v;
+            void this.apply();
+          }),
+      );
+      row.addExtraButton((b) =>
+        b
+          .setIcon("trash")
+          .setTooltip("Remove field")
+          .onClick(() => {
+            this.fields.splice(i, 1);
+            this.renderFields();
+            void this.apply();
+          }),
+      );
+      this.fieldIssueEls.push(el.createDiv());
+    });
+  }
+
+  private validate(): Issue[] {
+    const parsed = parseDocTemplates(this.templatesText);
+    return [...(this.index ? validateFields(this.fields, this.index) : []), ...parsed.issues, ...validateTemplates(parsed.templates, this.fields)];
+  }
+
+  private issueLine(parent: HTMLElement, issue: Issue): void {
+    const line = parent.createDiv({ cls: issue.level === "error" ? "mod-warning" : "setting-item-description" });
+    line.style.margin = "0 0 6px 0";
+    line.createSpan({ text: `${issue.level === "error" ? "✖" : "⚠"} ${issue.message} ` });
+    const fix = issue.fix;
+    const row = /^field:(\d+)$/.exec(issue.where);
+    if (fix && row)
+      line.createEl("button", { text: fix.label }).addEventListener("click", () => {
+        this.fields[Number(row[1])] = fix.binding;
+        this.renderFields();
+        void this.apply();
+      });
+  }
+
+  private showIssues(issues: Issue[]): void {
+    this.fieldIssueEls.forEach((el) => el.empty());
+    this.templateIssuesEl?.empty();
+    for (const issue of issues) {
+      const row = /^field:(\d+)$/.exec(issue.where);
+      const parent = row ? this.fieldIssueEls[Number(row[1])] : this.templateIssuesEl;
+      if (parent) this.issueLine(parent, issue);
+    }
+    const errors = issues.filter((i) => i.level === "error").length;
+    this.statusEl?.setText(errors ? `✖ ${errors} error${errors > 1 ? "s" : ""} — not saved; the last valid configuration is still in use.` : "✔ Configuration valid.");
+    this.statusEl?.toggleClass("mod-warning", errors > 0);
+  }
+
+  /** Validate the draft; save it (and refresh commands + Alt+Q menu) only when it has no errors. */
+  private async apply(): Promise<void> {
+    const parsed = parseDocTemplates(this.templatesText);
+    if (parsed.issues.length) {
+      this.showIssues(this.validate());
+      return;
+    }
+    const issues = await this.plugin.applyDocConfig(structuredClone(this.fields), parsed.templates);
+    this.showIssues([...issues, ...parsed.issues]);
   }
 }
 

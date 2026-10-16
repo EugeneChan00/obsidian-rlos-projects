@@ -6,7 +6,16 @@ Requires **Vault Automation** (API v1). Window Spaces integration requires [Wind
 
 ## Document names
 
-**Copy document name for current project** (command, ribbon button, or right-click *Copy document name…* inside a project folder) lists file-name templates rendered for that project and rev and copies the chosen one, extension included. Tokens: `{opp} {name} {folder} {rev} {sap} {pcbr} {po_number} {sales_order} {end_user} {site} {date} {yymmdd}`; `{rev}` is the `Rev-N` you are in, else `current_rev`; `{sap}` comes from the rev note only (the project `sapq` is offered as a prefill to confirm). Tokens with no value are asked for and remembered per project and rev until Obsidian restarts. Edit templates under Settings → RLOS Projects → *Document names* (`Label | extension | pattern` per line).
+**Copy document name for current project** (command, ribbon button, right-click *Copy document name…* inside a project folder, or one *Copy document name: <template>* command per template) renders file-name templates for that project and rev and copies the chosen one, extension included.
+
+- **Fields** bind each `{token}` to a frontmatter property on the project, rev or PO note (defaults: `{opp}` → project `opp`, `{sapq}` → rev `sap` with project `sapq` as prefill, `{sales_order}` → PO `sales_order`, …). Property names are case-sensitive; settings suggest the exact keys your notes use and reject case mismatches with a one-click fix. Bound properties get a type in Obsidian (`types.json`) with that exact spelling.
+- **Built-in tokens**: `{folder} {folder_opp} {rev} {date} {yymmdd}`; `{rev}` is the `Rev-N` you are in, else `current_rev`.
+- **Missing or ambiguous values** (empty property, several values in a list, no PO note) are asked for, remembered per project and rev for the session, and — with *Save typed values to notes* on — written to the bound property.
+- **Validation**: unknown tokens, bad braces/extensions, duplicate labels or tokens, and case mismatches are errors; nothing is saved while one remains and the last valid configuration stays in use.
+
+## Alt+Q menu (QuickAdd)
+
+On start and after template changes, the plugin writes its entries to the top of QuickAdd's menu: New Project, New Revision, Change Status, Add Task (`vault-kit/scripts/add_task.js`), Copy Document Name…, and *Doc Name: <template>*. A QuickAdd choice with one of these names is replaced; other choices stay. Run **Sync Alt+Q (QuickAdd) menu** to force it.
 
 ## Install
 
