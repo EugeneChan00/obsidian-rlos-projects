@@ -1,7 +1,7 @@
 {
   "id": "rlos-projects",
   "name": "RLOS Projects",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minAppVersion": "1.12.0",
   "description": "Project/revision/PO schema, status automation, canvas workspace sync, and layout migration for the RLOS quote vault.",
   "author": "rlabs",

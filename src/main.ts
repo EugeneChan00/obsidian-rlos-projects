@@ -1,4 +1,4 @@
-import { Modal, Notice, Plugin, PluginSettingTab, Setting, type App } from "obsidian";
+import { Notice, Plugin, PluginSettingTab, Setting, type App } from "obsidian";
 import type { AutomationApi, Disposable, Validator } from "vault-automation/src/api";
 import {
   DEFAULT_DOC_TEMPLATES,
@@ -43,6 +43,7 @@ import {
 } from "./model";
 import { syncQuickAddMenu, type MenuEntry } from "./quickmenu";
 import { RlosAdapter, type CanvasOptions } from "./rules";
+import { NewProjectModal, NewRevisionModal, type Intake } from "./intake";
 import { ChangeStatusModal } from "./status";
 
 const CHECK_REPORT = "spaces/reports/RLOS Check.md";
@@ -137,7 +138,7 @@ export default class RlosProjectsPlugin extends Plugin {
       void this.syncMenu(false);
     });
 
-    this.addCommand({ id: "new-project", name: "New project", callback: () => new NewProjectModal(this.app, (k, o, n) => this.newProject(k, o, n)).open() });
+    this.addCommand({ id: "new-project", name: "New project", callback: () => new NewProjectModal(this.app, (k, o, n, i) => this.newProject(k, o, n, i)).open() });
     this.addCommand({
       id: "new-revision",
       name: "New revision for current project",
@@ -145,7 +146,7 @@ export default class RlosProjectsPlugin extends Plugin {
         const file = this.app.workspace.getActiveFile();
         if (!file || !locate(file.path)) new Notice(NOT_IN_PROJECT);
         else if (!this.adapter) new Notice("RLOS automation is not active (Vault Automation plugin missing?)");
-        else void this.newRevision(file.path);
+        else new NewRevisionModal(this.app, (i) => this.newRevision(file.path, i)).open();
       },
     });
     this.addCommand({
@@ -349,7 +350,7 @@ export default class RlosProjectsPlugin extends Plugin {
     new Notice(`Window spaces synced for ${n} projects`);
   }
 
-  private async newProject(kind: KindFolder, opp: string, name: string): Promise<void> {
+  private async newProject(kind: KindFolder, opp: string, name: string, intake?: Intake): Promise<void> {
     const api = this.requireApi();
     const digits = opp.replace(/\D/g, "");
     const folder = `${digits || `TEMP-${today().slice(2).replace(/-/g, "")}`} ${sanitizeName(name)}`;
@@ -360,14 +361,18 @@ export default class RlosProjectsPlugin extends Plugin {
     }
     await api.notes.ensureFolder(`${root}/${RFQ}`);
     const note = await api.notes.createFromTemplate(TEMPLATES.project, projectNotePath(root, folder), templateVars(kind, folder, digits));
-    await this.newRevision(note.path);
+    if (intake && Object.keys(intake.project).length) await api.props.set(note.path, intake.project);
+    await this.newRevision(note.path, intake);
     await this.app.workspace.getLeaf(true).openFile(note);
   }
 
-  private async newRevision(path: string): Promise<void> {
+  private async newRevision(path: string, intake?: Intake): Promise<void> {
     const note = await this.adapter!.newRevision(path);
     const loc = note ? locate(note) : null;
     if (!note || !loc) return;
+    if (intake && Object.keys(intake.rev).length) await this.requireApi().props.set(note, intake.rev);
+    const file = intake?.reason.trim() ? this.requireApi().notes.file(note) : null;
+    if (file) await this.app.vault.process(file, (body) => `${body.trimEnd()}\n\n## Revision Reason\n${intake!.reason.trim()}\n`);
     await this.adapter!.syncCanvas(loc);
     new Notice(`Created ${note.split("/").pop()!.replace(/\.md$/, "")}`);
   }
@@ -697,43 +702,5 @@ class RlosSettingTab extends PluginSettingTab {
     }
     const issues = await this.plugin.applyDocConfig(structuredClone(this.fields), parsed.templates);
     this.showIssues([...issues, ...parsed.issues]);
-  }
-}
-
-class NewProjectModal extends Modal {
-  private kind: KindFolder = "MCCs";
-  private opp = "";
-  private name = "";
-
-  constructor(
-    app: App,
-    private readonly submit: (kind: KindFolder, opp: string, name: string) => Promise<void>,
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.setTitle("New project");
-    new Setting(this.contentEl).setName("Kind").addDropdown((d) =>
-      d.addOptions({ MCCs: "MCC", Units: "Unit" }).setValue(this.kind).onChange((v) => {
-        this.kind = v === "Units" ? "Units" : "MCCs";
-      }),
-    );
-    new Setting(this.contentEl).setName("Opportunity number").setDesc("Leave blank for a TEMP project").addText((t) => t.onChange((v) => (this.opp = v)));
-    new Setting(this.contentEl).setName("Name").addText((t) => t.onChange((v) => (this.name = v)));
-    new Setting(this.contentEl).addButton((b) =>
-      b.setButtonText("Create").setCta().onClick(() => {
-        if (!sanitizeName(this.name)) {
-          new Notice("Name is required");
-          return;
-        }
-        this.close();
-        void this.submit(this.kind, this.opp, this.name);
-      }),
-    );
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
   }
 }
